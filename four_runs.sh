@@ -10,16 +10,17 @@ while [ "$1" != "" ]; do
     esac
 done
 printf "Launching a job on each GPU with model type %s, base seed is %s\n" $model_type $base_seed
-batch_size=64
+batch_size=100
 step_size=0.001
-decay=0.912
-n_epochs=25
+decay=0.94
+epochs=50
+iters=1
 for VARIABLE in 0 1 2 3
 do
         let 'seed = VARIABLE + base_seed'
-        python train.py -b $batch_size --step_size $step_size --decay $decay -e $n_epochs -g $VARIABLE -s -m $model_type --seed $seed &
+        python train.py -i $iters -b $batch_size --step_size $step_size --decay $decay -e $epochs -g $VARIABLE -s -m $model_type --seed $seed &
         disown %1
-        sleep 5
+        sleep 30
 
 done
 printf 'Successfully started all jobs\n'

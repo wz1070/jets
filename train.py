@@ -7,7 +7,7 @@ import logging
 import pickle
 import datetime
 import time
-import sys; print('here!!!!!', file=sys.stderr)
+import sys
 import os
 import signal
 import argparse
@@ -63,17 +63,17 @@ parser.add_argument("--hidden", type=int, default=40)
 # logging args
 parser.add_argument("-s", "--silent", action='store_true', default=False)
 parser.add_argument("-v", "--verbose", action='store_true', default=False)
-parser.add_argument("--eval_every", type=int, default=25)
+parser.add_argument("--extra_tag", type=int, default=0)
 
 # loading previous models args
 parser.add_argument("-l", "--load", help="model directory from which we load a state_dict", type=str, default=None)
 parser.add_argument("-r", "--restart", help="restart a loaded model from where it left off", action='store_true', default=False)
 
 # training args
-parser.add_argument("-e", "--epochs", type=int, default=25)
-parser.add_argument("-b", "--batch_size", type=int, default=64)
+parser.add_argument("-e", "--epochs", type=int, default=100)
+parser.add_argument("-b", "--batch_size", type=int, default=100)
 parser.add_argument("-a", "--step_size", type=float, default=0.001)
-parser.add_argument("-d", "--decay", type=float, default=.912)
+parser.add_argument("-d", "--decay", type=float, default=.94)
 
 # computing args
 parser.add_argument("--seed", help="Random seed used in torch and numpy", type=int, default=1)
@@ -99,10 +99,9 @@ if args.debug:
     args.epochs = 3
     args.n_train = 1000
     args.seed = 1
-    args.eval_every = 10
 
-if args.gpu != "":
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+
 
 if args.n_train <= 5 * args.n_valid and args.n_train > 0:
     args.n_valid = args.n_train // 5
@@ -117,30 +116,11 @@ def train(args):
     ''' DATA '''
     '''----------------------------------------------------------------------- '''
     logging.warning("Loading data...")
-    if args.debug and False:
-        for k in range(15):
-            time.sleep(1)
-            logging.info('before load tf: {} seconds'.format(k+1))
 
     tf = load_tf(args.data_dir, "{}-train.pickle".format(args.filename))
-
-    if args.debug and False:
-        for k in range(15):
-            time.sleep(1)
-            logging.info('before load_data: {} seconds'.format(k+1))
-
     X, y = load_data(args.data_dir, "{}-train.pickle".format(args.filename))
-
-    logging.warning("Memory usage = {}".format(0))
-    if args.debug and False:
-        for k in range(15):
-            time.sleep(1)
-            logging.info('before tf transform: {} seconds'.format(k+1))
-
     for ij, jet in enumerate(X):
         jet["content"] = tf.transform(jet["content"])
-
-    logging.warning("After transform: memory usage = {}".format(eh.usage()))
 
     if args.n_train > 0:
         indices = torch.randperm(len(X)).numpy()[:args.n_train]
@@ -205,10 +185,6 @@ def train(args):
 
     if torch.cuda.is_available():
         logging.warning("Moving model to GPU")
-        if args.debug and False:
-            for k in range(30):
-                time.sleep(1)
-                logging.info('{} seconds'.format(k+1))
         model.cuda()
         logging.warning("Moved model to GPU")
 
@@ -221,7 +197,7 @@ def train(args):
     scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=args.decay)
     #scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5)
 
-    n_batches = int(np.ceil(len(X_train) / args.batch_size))
+    n_batches = int(len(X_train) // args.batch_size)
     best_score = [-np.inf]  # yuck, but works
     best_model_state_dict = copy.deepcopy(model.state_dict())
 
@@ -234,7 +210,8 @@ def train(args):
     '''----------------------------------------------------------------------- '''
     def callback(epoch, iteration, model):
 
-        if iteration % args.eval_every == 0:
+        if iteration % n_batches == 0:
+            t0 = time.time()
             model.eval()
 
             offset = 0; train_loss = []; valid_loss = []
@@ -246,7 +223,7 @@ def train(args):
                 tl = unwrap(loss(model(X_var), y_var)); train_loss.append(tl)
                 X = unwrap_X(X_var); y = unwrap(y_var)
 
-                Xv, yv = X_valid[offset:offset+args.batch_size], y_valid[offset:offset+args.batch_size]
+                Xv, yv = X_valid[idx], y_valid[idx]
                 X_var = wrap_X(Xv); y_var = wrap(yv)
                 y_pred = model(X_var)
                 vl = unwrap(loss(y_pred, y_var)); valid_loss.append(vl)
@@ -260,6 +237,8 @@ def train(args):
             yy = np.concatenate(yy, 0)
             yy_pred = np.concatenate(yy_pred, 0)
 
+            t1=time.time()
+            logging.info("Modeling validation data took {}s".format(t1-t0))
             logdict = dict(
                 epoch=epoch,
                 iteration=iteration,
@@ -284,7 +263,7 @@ def train(args):
     for i in range(args.epochs):
         logging.info("epoch = %d" % i)
         logging.info("step_size = %.8f" % settings['step_size'])
-
+        t0 = time.time()
         for _ in range(n_batches):
             iteration += 1
             model.train()
@@ -297,8 +276,9 @@ def train(args):
             l.backward()
             optimizer.step()
             X = unwrap_X(X_var); y = unwrap(y_var)
-
             callback(i, iteration, model)
+        t1 = time.time()
+        logging.info("Epoch took {} seconds".format(t1-t0))
 
         scheduler.step()
         settings['step_size'] = args.step_size * (args.decay) ** (i + 1)
